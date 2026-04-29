@@ -1,5 +1,10 @@
 {
+  "scripts": {
+    "stimulate": "node ./functions/simulators/alpacaMintSimulator.js",
+    "uploadSecrets": "node ./functions/uploadSecrets.js"
+  },
   "dependencies": {
-    "@chainlink/functions-toolkit": "^0.3.2"
+    "@chainlink/functions-toolkit": "^0.3.2",
+    "dotenv": "^17.4.2"
   }
 }

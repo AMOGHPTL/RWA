@@ -1,0 +1,20 @@
+import { simulateScript, decodeResult } from "@chainlink/functions-toolkit";
+import  requestConfig  from "../configs/alpacaMintConfig.js";
+
+async function main() {
+  const { responseBytesHexstring, errorString } =
+    await simulateScript(requestConfig);
+  if (responseBytesHexstring) {
+    console.log(
+      `Response returned by script: ${decodeResult(responseBytesHexstring, requestConfig.expectedReturnType).toString()}\n`,
+    );
+  }
+  if (errorString) {
+    console.log(`Error returned by script: ${errorString}\n`);
+  }
+}
+
+main().catch((error) => {
+  console.log(error);
+  process.exitCode = 1;
+});

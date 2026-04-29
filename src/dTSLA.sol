@@ -59,6 +59,9 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
     uint256 constant COLLATERAL_PRECISION  = 100;
     uint256 constant MINIMUM_WITHDRAWL_AMOUNT = 100e18;
 
+    uint8 donHostedSecretsSlotId = 0; // slot id where the DON is hosting the secret for the alpaca brokerage api key
+    uint64 donHosteedSecretsVersion = 1777488370; // version of the secret being hosted by the DON
+
     constructor(string memory mintSourceCode, uint64 subId, string memory redeemSourceCode) ConfirmedOwner(msg.sender) FunctionsClient(SEPOLIA_FUNCTIONS_ROUTER) ERC20("dTSLA","dTSLA"){
         s_mintSourceCode = mintSourceCode;
         i_subId = subId;
@@ -72,7 +75,12 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
     // 2 txn function
     function sendMintRequest(uint256 amount) public onlyOwner returns (bytes32){
         FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavascript(s_mintSourceCode);
+        req.initializeRequest(
+    FunctionsRequest.Location.Inline,
+    FunctionsRequest.CodeLanguage.JavaScript,
+    s_mintSourceCode
+);
+        req.addDONHostedSecret(donHostedSecretsSlotId, donHosteedSecretsVersion); // this is how we pass the alpaca api key securely to the chainlink function
         bytes32 requestId = _sendRequest(req.encodeCBOR(), i_subId, GAS_LIMIT, DON_ID);
         s_requestIdToRequest[requestId] = dTSLARequest(amount ,msg.sender, MintOrReedem.mint);
         return requestId;
@@ -101,14 +109,18 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
     /// 1. Sell TSLA on brokarage
     /// 2. Buy USDC on brokarage
     /// 3. send the USDC to this contract for the user to withdraw
-    function sendReedemRequest(uint256 amountdTSLA) public {
+    function sendReedemRequest(uint256 amountdTSLA) public returns(bytes32){
       uint256 amountTslaInUsdc = getUsdcValueOfUsd(getUsdValueOfTsla(amountdTSLA));
       if(amountTslaInUsdc < MINIMUM_WITHDRAWL_AMOUNT){
         revert dTSLA__LessThanMinimumWithdrawlAmount();
       }
 
        FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavascript(s_redeemSourceCode);
+       req.initializeRequest(
+    FunctionsRequest.Location.Inline,
+    FunctionsRequest.CodeLanguage.JavaScript,
+    s_redeemSourceCode
+);
 
         string[] memory args = new string[](2);
         args[0] = amountdTSLA.toString(); // we are telling the brokerage to sell this much TSLA and 
@@ -117,9 +129,11 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
 
         bytes32 requestId = _sendRequest(req.encodeCBOR(), i_subId, GAS_LIMIT, DON_ID);
         s_requestIdToRequest[requestId] = dTSLARequest(amountdTSLA ,msg.sender, MintOrReedem.redeem);
-        return requestId;
+        
 
         _burn(msg.sender, amountdTSLA); // In order to get USDC the user has to burn the dTSLA.
+
+        return requestId;
     }
 
     function _reedemFulFillRequest(bytes32 requestId, bytes memory response) internal {
@@ -173,13 +187,13 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
     function getTslaPrice() public view returns(uint256) {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(SEPOLIA_TSLA_PRICE_FEEDS);
         (,int256 price,,,) = priceFeed.latestRoundData();
-        return price * ADDITIONAL_FEED_PRECISION; // So that we have 18 decimals
+        return uint256(price) * ADDITIONAL_FEED_PRECISION; // So that we have 18 decimals
     }
 
     function getUsdcPrice() public view returns(uint256){
         AggregatorV3Interface priceFeed = AggregatorV3Interface(SEPOLIA_USDC_PRICE_FEEDS);
         (,int256 price,,,) = priceFeed.latestRoundData();
-        return price * ADDITIONAL_FEED_PRECISION; // So that we have 18 decimals
+        return uint256(price) * ADDITIONAL_FEED_PRECISION; // So that we have 18 decimals
 
     }
 

@@ -60,7 +60,9 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
     uint256 constant MINIMUM_WITHDRAWL_AMOUNT = 100e18;
 
     uint8 donHostedSecretsSlotId = 0; // slot id where the DON is hosting the secret for the alpaca brokerage api key
-    uint64 donHosteedSecretsVersion = 1777488370; // version of the secret being hosted by the DON
+    uint64 donHostedSecretsVersion = 1777552645; // version of the secret being hosted by the DON
+
+    bytes32 private s_latestRequestId;
 
     constructor(string memory mintSourceCode, uint64 subId, string memory redeemSourceCode) ConfirmedOwner(msg.sender) FunctionsClient(SEPOLIA_FUNCTIONS_ROUTER) ERC20("dTSLA","dTSLA"){
         s_mintSourceCode = mintSourceCode;
@@ -80,9 +82,10 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
     FunctionsRequest.CodeLanguage.JavaScript,
     s_mintSourceCode
 );
-        req.addDONHostedSecret(donHostedSecretsSlotId, donHosteedSecretsVersion); // this is how we pass the alpaca api key securely to the chainlink function
+        req.addDONHostedSecrets(donHostedSecretsSlotId, donHostedSecretsVersion); // this is how we pass the alpaca api key securely to the chainlink function
         bytes32 requestId = _sendRequest(req.encodeCBOR(), i_subId, GAS_LIMIT, DON_ID);
         s_requestIdToRequest[requestId] = dTSLARequest(amount ,msg.sender, MintOrReedem.mint);
+        s_latestRequestId = requestId;
         return requestId;
     }
 
@@ -110,31 +113,31 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
     /// 2. Buy USDC on brokarage
     /// 3. send the USDC to this contract for the user to withdraw
     function sendReedemRequest(uint256 amountdTSLA) public returns(bytes32){
-      uint256 amountTslaInUsdc = getUsdcValueOfUsd(getUsdValueOfTsla(amountdTSLA));
-      if(amountTslaInUsdc < MINIMUM_WITHDRAWL_AMOUNT){
+    uint256 amountTslaInUsdc = getUsdcValueOfUsd(getUsdValueOfTsla(amountdTSLA));
+    if(amountTslaInUsdc < MINIMUM_WITHDRAWL_AMOUNT){
         revert dTSLA__LessThanMinimumWithdrawlAmount();
-      }
-
-       FunctionsRequest.Request memory req;
-       req.initializeRequest(
-    FunctionsRequest.Location.Inline,
-    FunctionsRequest.CodeLanguage.JavaScript,
-    s_redeemSourceCode
-);
-
-        string[] memory args = new string[](2);
-        args[0] = amountdTSLA.toString(); // we are telling the brokerage to sell this much TSLA and 
-        args[1] = amountTslaInUsdc.toString(); // send this much USDC back to the contract for the user to redeem
-        req.setArgs(args);
-
-        bytes32 requestId = _sendRequest(req.encodeCBOR(), i_subId, GAS_LIMIT, DON_ID);
-        s_requestIdToRequest[requestId] = dTSLARequest(amountdTSLA ,msg.sender, MintOrReedem.redeem);
-        
-
-        _burn(msg.sender, amountdTSLA); // In order to get USDC the user has to burn the dTSLA.
-
-        return requestId;
     }
+
+    FunctionsRequest.Request memory req;
+    req.initializeRequest(
+        FunctionsRequest.Location.Inline,
+        FunctionsRequest.CodeLanguage.JavaScript,
+        s_redeemSourceCode
+    );
+
+    string[] memory args = new string[](2);
+    args[0] = amountdTSLA.toString();
+    args[1] = amountTslaInUsdc.toString();
+    req.setArgs(args);
+
+    // Burn FIRST before sending the request
+    _burn(msg.sender, amountdTSLA);
+
+    bytes32 requestId = _sendRequest(req.encodeCBOR(), i_subId, GAS_LIMIT, DON_ID);
+    s_requestIdToRequest[requestId] = dTSLARequest(amountdTSLA, msg.sender, MintOrReedem.redeem);
+
+    return requestId;
+}
 
     function _reedemFulFillRequest(bytes32 requestId, bytes memory response) internal {
         // assume for now this has 18 decimals
@@ -158,12 +161,21 @@ contract dTSLA is ConfirmedOwner ,FunctionsClient, ERC20{
         }     
     }
 
-    function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory /*err*/) internal override{
-        if(s_requestIdToRequest[requestId].mintOrRedeem == MintOrReedem.mint){
-            _mintFulFillRequest(requestId, response);
-        } else {
-            _reedemFulFillRequest(requestId, response);
+    function fulfillRequest(bytes32 /*requestId*/, bytes memory response, bytes memory /*err*/) internal override{
+        // if(s_requestIdToRequest[requestId].mintOrRedeem == MintOrReedem.mint){
+        //     _mintFulFillRequest(requestId, response);
+        // } else {
+        //     _reedemFulFillRequest(requestId, response);
+        // }
+        s_portfolioBalance = uint256(bytes32(response));
+    }
+
+    function finishMint() public onlyOwner{
+        uint256 amountOfTokensToMint = s_requestIdToRequest[s_latestRequestId].amountOfTokens;
+        if(_getCollateralRatioAdjustedTotalBalance(amountOfTokensToMint) > s_portfolioBalance){
+            revert dTSLA__NotEnoughCollateral();
         }
+        _mint(s_requestIdToRequest[s_latestRequestId].requester, amountOfTokensToMint); // Minting requester with amountOfTokensToMint if there is enoungh TSLA tokens in the brokerage
     }
 
     function _getCollateralRatioAdjustedTotalBalance(uint256 amountOfTokensToMint) internal view returns(uint256){
